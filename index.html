@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Open Messaging demo</title>
+    <style>
+      body { margin: 0; padding-bottom: 3rem; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+
+      #form { background: rgba(0, 0, 0, 0.15); padding: 0.25rem; position: fixed; bottom: 0; left: 0; right: 0; display: flex; height: 3rem; box-sizing: border-box; backdrop-filter: blur(10px); }
+      #input { border: none; padding: 0 1rem; flex-grow: 1; border-radius: 2rem; margin: 0.25rem; }
+      #input:focus { outline: none; }
+      #form > button { background: #333; border: none; padding: 0 1rem; margin: 0.25rem; border-radius: 3px; outline: none; color: #fff; }
+
+      #messages { list-style-type: none; margin: 0; padding: 0; }
+      #messages > li { padding: 0.5rem 1rem; }
+      #messages > li:nth-child(odd) { background: #efefef; }
+      #messages > li:nth-child(even) { text-align: right; }
+
+      #typingindicator {flex: 1; text-align: right; float: right; white-space: nowrap;}
+
+     </style>
+  </head>
+  <body>
+    <table>
+      <tr>
+          <div>
+            <label for="uname">Email address: </label>
+            <input type="text" id="eaddress" autocomplete="off" size="50" value="paddington@example.com"/> 
+            <label for="name">Nickname: </label>
+            <input type="text" id="nname" autocomplete="off" value="Bear"/> 
+        </div>
+      </tr>
+      <tr>
+        <ul id="messages"></ul>
+        <div><span id="typingindicator"></span></div>
+        
+       
+      </tr>
+    </table>
+    <form id="form" action="">
+      <input id="input" autocomplete="off" /><button>Send</button>
+    </form>
+   
+    
+
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script>
+      var socket = io();
+
+      var messages = document.getElementById('messages');
+      var form = document.getElementById('form');
+      var input = document.getElementById('input');
+      var tmo = null;
+      var typingtimestamp = Date.now();
+      let senderaddress =  document.getElementById('eaddress');
+      let sendername = document.getElementById('nname');
+
+      form.addEventListener('submit', function(e) {
+        e.preventDefault();
+      
+        if (input.value)
+        {
+          //socket.emit('chat message', input.value);
+          socket.emit('new_message_from_page', {
+            fromaddress : senderaddress.value,
+            fromname : sendername.value,
+            message : input.value
+          })
+
+          var item = document.createElement('li');
+          item.textContent = input.value;
+          messages.appendChild(item);
+          window.scrollTo(0,document.body.scrollHeight);
+          input.value = '';
+        }
+      });
+
+      form.addEventListener('input', function(e) {
+       // console.log('typingtimestamp: ' + typingtimestamp);
+        var diff = Date.now() - typingtimestamp;
+        console.log(diff);
+        if (diff > 2000){ 
+         //socket.emit('chat typing','');
+          socket.emit('page_visitor_typing',{
+            fromaddress : senderaddress.value,
+            fromname : sendername.value
+          })
+        }
+        typingtimestamp = Date.now();         
+      });
+
+      socket.on('chat message', function(msg) {
+        var item = document.createElement('li');
+        item.textContent = msg;
+        messages.appendChild(item);
+        window.scrollTo(0,document.body.scrollHeight);
+      });
+
+      socket.on('typingind', function(e){
+        document.getElementById('typingindicator').innerHTML = "Typing ...";
+        if (tmo) {
+          clearTimeout(tmo);
+        }
+        tmo = setTimeout(function() {
+          document.getElementById('typingindicator').innerHTML = "";
+        },1000);
+      });
+
+    </script>
+  </body>
+</html>
