@@ -29,6 +29,7 @@ var conversationid;
 var messagingid;
 var debug = false;
 var tunnel = null;
+var simulatefailures =  false;
 
 apiclient.setEnvironment(awsregion);
 
@@ -49,6 +50,7 @@ app.post('/openmessagingwebhook', (req,res) => {
     if (debug){
         Logger("RECV", "Webhook message headers " + JSON.stringify(req.headers, null, 2));
     }
+
  
     // integration - the integration object
     // normalizedMessage - the NormalizedMessage payload
@@ -67,6 +69,11 @@ app.post('/openmessagingwebhook', (req,res) => {
          //throw new Error("Webhook Validation Failed! Throw this away.");
          Logger("ERROR","X-HUB-Signature-256 validation failed, rejecting request.");
          res.sendStatus(403).end();
+    }
+    else if (simulatefailures) {
+        Logger("RECV","Webhook message " + JSON.stringify(req.body, null, 2));
+        Logger("INFO", "Rejecting request with 403");
+        res.sendStatus(403);
     }
     else {
         res.sendStatus(200);
@@ -366,13 +373,19 @@ function main()
 //init
 program
     .option('-h, --help', 'help')
+    .option('-ra, --rejectallrequests','simulate failures')
     .option('-v, --verbose','verbose logging');
+
 
 program.parse(process.argv);
 const options = program.opts();
 
-if (options.help) console.log("help text");
-if (options.verbose)
+if (options.help) console.log("help text")
+else if (options.rejectallrequests){
+    simulatefailures = true;
+    main();
+}
+else if (options.verbose)
 {
     debug = true;
     
