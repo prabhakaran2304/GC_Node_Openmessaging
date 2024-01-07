@@ -8,6 +8,8 @@ const platformclient =  require ('purecloud-platform-client-v2');
 const apiclient = platformclient.ApiClient.instance;
 const cryptomodule = require ('crypto')
 const localtunnel = require ('localtunnel');
+const readline = require('readline');
+const { program } = require('commander');
 
 //
 const awsregion = platformclient.PureCloudRegionHosts.eu_west_2;
@@ -25,33 +27,29 @@ var connectiondictionary = {};
 var convid = false;
 var conversationid;
 var messagingid;
+var debug = false;
+var tunnel = null;
 
-apiclient.setEnvironment(awsregionç);
-apiclient.config.logger.log_level = apiclient.config.logger.logLevelEnum.level.LDebug;
-apiclient.config.logger.log_format = apiclient.config.logger.logFormatEnum.formats.TEXT;
-apiclient.config.logger.log_request_body = true;
-apiclient.config.logger.log_response_body = true;
-apiclient.config.logger.log_to_console = true;
-//apiclient.config.logger.log_file_path = "openmessagingdemo.log";
-
-apiclient.config.logger.setLogger(); // To apply above changes
+apiclient.setEnvironment(awsregion);
 
 /*
 / web server handling external requests
 */
 app.use(express.json());
 
+
 app.get('/', (req,res) => {
-    console.log('chat page requested');
     res.sendFile(__dirname + '/index.html');
 });
 
 app.post('/openmessagingwebhook', (req,res) => {
 
-    console.log('webhook message received');
-   // console.log(JSON.stringify(req.headers));
-   // console.log(JSON.stringify(req.body));
+   // Logger("RECV","new webhook message received...");
 
+    if (debug){
+        Logger("RECV", "Webhook message headers " + JSON.stringify(req.headers, null, 2));
+    }
+ 
     // integration - the integration object
     // normalizedMessage - the NormalizedMessage payload
     // request - webhook request object
@@ -65,28 +63,25 @@ app.post('/openmessagingwebhook', (req,res) => {
     // console.log(`sha256=${messageHash}`);
     // console.log(signature);
    
-   if (`sha256=${messageHash}` !== signature) {
+    if (`sha256=${messageHash}` !== signature) {
          //throw new Error("Webhook Validation Failed! Throw this away.");
-         console.log('signature match error');
+         Logger("ERROR","X-HUB-Signature-256 validation failed, rejecting request.");
          res.sendStatus(403).end();
     }
-     else {
-        console.log('signature match success');
+    else {
         res.sendStatus(200);
         var jsondata = JSON.parse(jsonrequestbody);
 
         if (jsondata.type == 'Text')
         {
-
+            Logger("RECV","Outbound text message " + JSON.stringify(req.body, null, 2));
             if (!messagingid)
             {
                  messagingid =  jsondata.id;
-                 console.log('messaging id ', messagingid);
             }
 
             if(!convid)
             {
-                console.log('looking up conversation id');
                 var msgid = jsondata.channel.messageId;
             
                 let opts = { 
@@ -95,45 +90,46 @@ app.post('/openmessagingwebhook', (req,res) => {
 
                 conversationapi.getConversationsMessageDetails(msgid, opts)
                 .then((data) => {
-                    console.log(`getConversationsMessageDetails success! data: ${JSON.stringify(data, null, 2)}`);
+                   // console.log(`getConversationsMessageDetails success! data: ${JSON.stringify(data, null, 2)}`);
                     convid = true;
                     conversationid = data.conversationId;
-                    console.log('conversation id: ', conversationid);
+                   Logger("INFO","Associated conversation ID: " + conversationid);
                 })
                 .catch((err) => {
-                    console.log('There was a failure calling getConversationsMessageDetails');
-                    console.error(err);
+                    Logger("ERROR","Failure retrieving conversation ID " +  err);
+
                 });
             }
            
             io.sockets.emit('chat message',jsondata.text);
 
-            SendInboundReceiptToOrg(jsondata);
+            SendReceiptToOrg(jsondata);
     
         }
         else if (jsondata.type == 'Event')
         {
             if (jsondata.events[0].eventType == 'Typing')
             {
+                Logger("RECV","Outbound Typing Event " + JSON.stringify(req.body, null, 2));
                 io.sockets.emit('typingind','');                            
             }
         }
+        else if (jsondata.type == "Receipt")
+        {
+            Logger("RECV","Receipt for inbound message " + JSON.stringify(req.body, null, 2));
+        }
     }
 });
-
 
 /*
 / page handling internal requests
 */
 io.on('connection', (socket) => {
-    console.log('a new web page user connected');
-
-    
+        
    // connectiondictionary[senderid] = socket.id; 
    
    //v2 web page user sent chat message, forwarding it to Genesys Cloud
-   socket.on('new_message_from_page', (msg) => {
-    console.log('Sending message...');
+    socket.on('new_message_from_page', (msg) => {
     const now = new Date();
     var body = {
             "id":senderid,
@@ -156,23 +152,19 @@ io.on('connection', (socket) => {
             "direction":"Inbound"
         };
     
-   // console.log(body);
-    
 
     conversationapi.postConversationsMessageInboundOpenMessage(openmessagingintegrationid, body)
     .then((data) => {
-            console.log(`postConversationsMessageInboundOpenMessage success! data: ${JSON.stringify(data, null, 2)}`);
+        Logger("XMIT","Sent inbound message " + JSON.stringify(data, null, 2));
     })
     .catch((err) => {
-        console.log('There was a failure calling postConversationsMessageInboundOpenMessage');
-        console.error(err);
+        Logger("ERROR", "Failure sending inbound message " + err);
     });
   
     });
 
     //v1 web page user sent chat message, forwarding it to Genesys Cloud
     socket.on('chat message', (msg) => {
-       console.log('Sending message...');
        const now = new Date();
        var body = {
                "id":senderid,
@@ -194,25 +186,21 @@ io.on('connection', (socket) => {
                "text":msg,
                "direction":"Inbound"
            };
-       
-       console.log(body);
-       
+              
        const integrationId = '83862e6c-b4b9-44a9-b02e-6e6fc69450c4';
    
        conversationapi.postConversationsMessageInboundOpenMessage(integrationId, body)
         .then((data) => {
-            console.log(`postConversationsMessageInboundOpenMessage success! data: ${JSON.stringify(data, null, 2)}`);
+            Logger("XMIT","Sent inbound message " + JSON.stringify(data, null, 2));
          })
          .catch((err) => {
-           console.log('There was a failure calling postConversationsMessageInboundOpenMessage');
-          console.error(err);
+            Logger("ERROR", "Failure sending inbound message " + err);
         });
      
     });
 
     //v2 web page user typing in input box, sending event to Genesys Cloud
     socket.on('page_visitor_typing', (msg) => {
-        console.log('chat typing: ...');
 
         const now = new Date();
         var body = {
@@ -230,23 +218,20 @@ io.on('connection', (socket) => {
                 }
                ]
            };
-       
-       //console.log(body);
-   
+          
        conversationapi.postConversationsMessageInboundOpenEvent(openmessagingintegrationid, body)
         .then((data) => {
-            console.log(`postConversationsMessageInboundOpenMessage success! data: ${JSON.stringify(data, null, 2)}`);
+            Logger("XMIT", "Sent inbound typing event " + JSON.stringify(data, null, 2));
          })
         .catch((err) => {
-             console.log('There was a failure calling postConversationsMessageInboundOpenMessage');
-             console.error(err);
+             Logger("ERROR","Failure sending inbound typing event " + err);
         });
     
     });
 
     //v1 web page user typing in input box, sending event to Genesys Cloud
     socket.on('chat typing', (msg) => {
-        console.log('chat typing: ...');
+        Logger("INFO", "local chat user typing: ...");
 
         const now = new Date();
         var body = {
@@ -264,37 +249,34 @@ io.on('connection', (socket) => {
                 }
                ]
            };
-       
-       console.log(body);
-       
        const integrationId = '83862e6c-b4b9-44a9-b02e-6e6fc69450c4';
    
        conversationapi.postConversationsMessageInboundOpenEvent(integrationId, body)
      .then((data) => {
-       console.log(`postConversationsMessageInboundOpenMessage success! data: ${JSON.stringify(data, null, 2)}`);
+       Logger("XMIT","Typing event, postConversationsMessageInboundOpenMessage " + JSON.stringify(data, null, 2));
      })
      .catch((err) => {
-       console.log('There was a failure calling postConversationsMessageInboundOpenMessage');
-       console.error(err);
+        Logger("ERROR","Failure sending typing event " + err);
+       
      });
     
     });
 
     //web user closed browser, disconnecting conversation on Genesys Cloud
     socket.on('disconnect', () => {
-        console.log('a user disconnected');
+        Logger("INFO","Webpage user disconnected.");
 
         if(conversationid){
-            console.log('disconnecting conversation: ' + conversationid);
-        let body = {"state":"disconnected"};
+            Logger("INFO","Disconnecting conversation: " + conversationid);
+           
+            let body = {"state":"disconnected"};
 
-        conversationapi.patchConversationsMessage(conversationid, body)
-            .then((data) => {
-                console.log(`patchConversationsMessage success! data: ${JSON.stringify(data, null, 2)}`);
-            })
-            .catch((err) => {
-                console.log('There was a failure calling patchConversationsMessage');
-                console.error(err);
+            conversationapi.patchConversationsMessage(conversationid, body)
+                .then((data) => {
+                   Logger("INFO","patchConversationsMessage success! data: " + JSON.stringify(data, null, 2));
+                })
+                .catch((err) => {
+                    Logger("ERROR","There was a failure disconnecting conversation" + err);
             });
         }
 
@@ -302,55 +284,32 @@ io.on('connection', (socket) => {
 });
 
 
-/*
-function SendInboundMessageToOrg(chatmessage) {
-    console.log('Sending message...');
-    const now = new Date();
-    var body = {
-            "id":senderid,
-            "channel": {
-                "platform":"Open",
-                "type":"Private",
-                "messageId":cryptomodule.randomUUID(),
-                "to": {
-                    "id":"83862e6c-b4b9-44a9-b02e-6e6fc69450c4",
-                },
-                "from":{
-                    "nickname":"Bear",
-                    "id":"paddington@example.com",
-                    "idType":"email"
-                },
-            "time":now.toISOString()
-            },
-            "type":"Text",
-            "text":chatmessage,
-            "direction":"Inbound"
-        };
-    
-    console.log(body);
-    
-    const integrationId = '83862e6c-b4b9-44a9-b02e-6e6fc69450c4';
+//event handling
 
-    conversationapi.postConversationsMessageInboundOpenMessage(integrationId, body)
-  .then((data) => {
-    console.log(`postConversationsMessageInboundOpenMessage success! data: ${JSON.stringify(data, null, 2)}`);
-  })
-  .catch((err) => {
-    console.log('There was a failure calling postConversationsMessageInboundOpenMessage');
-    console.error(err);
-  });
+process.stdin.on('keypress',(str,key) => {
+
+    switch(str)
+    {
+        case 'q':
+            
+            tunnel.close();
+            break;
+    }
+});
+
+//functions
+
+function Logger(state, data){
+    console.log(new Date().toISOString() + " - " + state + " -- " + data );
 }
-*/
 
-function SendInboundReceiptToOrg(recvdmessagejson) {
-    console.log('Sending receipt...');
+function SendReceiptToOrg(recvdmessagejson) {
     
     const now = new Date();
     var body = {
             "id":messagingid,
             "channel": {
                 "to": {
-                    //"id":"83862e6c-b4b9-44a9-b02e-6e6fc69450c4",
                     "id":recvdmessagejson.channel.id,
                     "idType":"email"
                 },
@@ -361,40 +320,83 @@ function SendInboundReceiptToOrg(recvdmessagejson) {
             "isFinalReceipt":true
         };
     
-   // console.log(body);
-
-
-   // conversationapi.postConversationsMessageInboundOpenMessage(integrationId, body)
-   conversationapi.postConversationsMessageInboundOpenReceipt(openmessagingintegrationid,body)
+  conversationapi.postConversationsMessageInboundOpenReceipt(openmessagingintegrationid,body)
   .then((data) => {
-    console.log(`postConversationsMessageInboundOpenMessage success! data: ${JSON.stringify(data, null, 2)}`);
+        Logger("XMIT","Sent receipt for outbound message" + JSON.stringify(data, null, 2));
   })
   .catch((err) => {
-    console.log('There was a failure calling postConversationsMessageInboundOpenMessage');
-    console.error(err);
+        Logger("ERROR", "Failure sending receipt for outbound message " + err);
   });
 }
 
-server.listen(3000, () => {
-    console.log('server listening on http://*:3000');
+function main()
+{
 
-    apiclient.loginClientCredentialsGrant(oauthid, oauthpw)
-    .then(() => {
-        console.log('SDK authenticated');
-        conversationapi = new platformclient.ConversationsApi();
-    })
-    .catch((err) => {
-        console.log('SDK authentication failure', err);
-    });
+    process.stdin.setRawMode(true);
+    readline.emitKeypressEvents(process.stdin);
 
-    (async () => {
-        const tunnel = await localtunnel({port:3000,subdomain:mylocaltunnelsubdomain});
-
-        console.log(tunnel.url);
-        tunnel.on('close',() => {
-            //tunnels are closed
-        });
-    })();
+    server.listen(3000, () => {
+        Logger("START","web server listening on http://localhost:3000");
     
-});
+        apiclient.loginClientCredentialsGrant(oauthid, oauthpw)
+        .then(() => {
+            Logger("START","Platform API initialized successfully.")
+            conversationapi = new platformclient.ConversationsApi();
+        })
+        .catch((err) => {
+            Logger("ERROR","Platform API initialization failed " + err);
+        });
+    
+        (async () => {
+            tunnel = await localtunnel({port:3000,subdomain:mylocaltunnelsubdomain});
+    
+            Logger("START","Local tunnel open: " +  tunnel.url);
+            tunnel.on('close',() => {
+                server.closeAllConnections();
+                server.close();
+                Logger("END","Tunnel closed!");
+                process.exit();
+            });
+        })();
+        
+    });
+}
+
+
+//init
+program
+    .option('-h, --help', 'help')
+    .option('-v, --verbose','verbose logging');
+
+program.parse(process.argv);
+const options = program.opts();
+
+if (options.help) console.log("help text");
+if (options.verbose)
+{
+    debug = true;
+    
+    apiclient.config.logger.log_level = apiclient.config.logger.logLevelEnum.level.LTrace;
+    apiclient.config.logger.log_format = apiclient.config.logger.logFormatEnum.formats.TEXT;
+    apiclient.config.logger.log_request_body = true;
+    apiclient.config.logger.log_response_body = true;
+    apiclient.config.logger.log_to_console = true;
+    apiclient.config.logger.setLogger(); // To apply above changes
+
+    main();
+}
+else 
+{
+    debug = false;
+    
+    apiclient.config.logger.log_level = apiclient.config.logger.logLevelEnum.level.LDebug;
+    apiclient.config.logger.log_format = apiclient.config.logger.logFormatEnum.formats.TEXT;
+    apiclient.config.logger.log_request_body = true;
+    apiclient.config.logger.log_response_body = true;
+    apiclient.config.logger.log_to_console = false;
+    apiclient.config.logger.setLogger(); // To apply above changes
+
+    main();
+}
+
 
