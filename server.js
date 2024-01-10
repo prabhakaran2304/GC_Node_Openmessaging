@@ -12,12 +12,13 @@ const readline = require('readline');
 const { program } = require('commander');
 
 //
+
 const awsregion = platformclient.PureCloudRegionHosts.eu_west_2;
-const oauthid = "ce4e0435-4627-4497-8906-d4c378840565";
-const oauthpw = "tK3kv0K71EMet8q-YR1R-0Y_kCSO3Q-AKSZ4QCXdjoI";
-const openmessagingintegrationid = "83862e6c-b4b9-44a9-b02e-6e6fc69450c4";
-const openmessagingintegrationsecret = "1234";
-const mylocaltunnelsubdomain = "abetztesting";
+const oauthid = "<oauth client id>";
+const oauthpw = "<oauth client secret>";
+const openmessagingintegrationid = "your open messaging configuration ID";
+const openmessagingintegrationsecret = "<Outbound Notification Webhook Signature Secret Token>";
+const mylocaltunnelsubdomain = "unique identifier of https://identifier.loca.lt/openmessagingwebhook as used in Outbound Notification Webhook URL";
 //
 
 
