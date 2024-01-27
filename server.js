@@ -405,34 +405,35 @@ function main()
             .then(() => {
                 Logger("START","Platform API initialized successfully.")
                 conversationapi = new platformclient.ConversationsApi();
-
+                
+                if (!process.env.CODESPACES)
+                {
+                    (async () => {
+                        tunnel = await localtunnel({port:3000});
+            
+                        Logger("START","Local tunnel open: " +  tunnel.url);
+                        localtunnelused = true;
+                        if(conversationapi)
+                            Update_Integration_Webhook_URL();
+                        
+                        tunnel.on('close',() => {
+                        });
+            
+            
+                    })();
+                }
+                else {
+                    if(conversationapi)
+                     Update_Integration_Webhook_URL();
+                }
+            
             })
             .catch((err) => {
                 Logger("ERROR","Platform API initialization failed " + err);
             });
 
 
-    if (!process.env.CODESPACES)
-    {
-        (async () => {
-            tunnel = await localtunnel({port:3000});
-
-            Logger("START","Local tunnel open: " +  tunnel.url);
-            localtunnelused = true;
-            if(conversationapi)
-                Update_Integration_Webhook_URL();
-            
-            tunnel.on('close',() => {
-            });
-
-
-        })();
-    }
-    else {
-        if(conversationapi)
-         Update_Integration_Webhook_URL();
-    }
-
+ 
 
 
     
