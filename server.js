@@ -1,3 +1,4 @@
+//#region global variable declarations
 const express = require ('express');
 const app = express();
 const http = require('http');
@@ -10,16 +11,9 @@ const cryptomodule = require ('crypto')
 const localtunnel = require ('localtunnel');
 const readline = require('readline');
 const { program } = require('commander');
+require('dotenv').config();
 
-//
-
-const awsregion = platformclient.PureCloudRegionHosts.eu_west_2;
-const oauthid = "<oauth client id>";
-const oauthpw = "<oauth client secret>";
-const openmessagingintegrationid = "your open messaging configuration ID";
-const openmessagingintegrationsecret = "<Outbound Notification Webhook Signature Secret Token>";
-const mylocaltunnelsubdomain = "unique identifier of https://identifier.loca.lt/openmessagingwebhook as used in Outbound Notification Webhook URL";
-//
+const openmessagingintegrationid = process.env.INTEGRATION_ID;
 
 
 var conversationapi;
@@ -31,12 +25,13 @@ var messagingid;
 var debug = false;
 var tunnel = null;
 var simulatefailures =  false;
+var localtunnelused = false;
+var currenturl = "https://cute-lions-act.loca.lt/openmessagingwebhook";
+var rejectcode = 403;
 
-apiclient.setEnvironment(awsregion);
+//#endregion
 
-/*
-/ web server handling external requests
-*/
+//#region web server handling
 app.use(express.json());
 
 
@@ -59,7 +54,7 @@ app.post('/openmessagingwebhook', (req,res) => {
 
     const jsonrequestbody = JSON.stringify(req.body);
     const signature = req.headers['x-hub-signature-256'];
-    const messageHash = cryptomodule.createHmac('sha256',  openmessagingintegrationsecret)
+    const messageHash = cryptomodule.createHmac('sha256',  process.env.INTEGRATION_SECRET)
      .update(jsonrequestbody)
      .digest('base64');
 
@@ -74,7 +69,7 @@ app.post('/openmessagingwebhook', (req,res) => {
     else if (simulatefailures) {
         Logger("RECV","Webhook message " + JSON.stringify(req.body, null, 2));
         Logger("INFO", "Rejecting request with 403");
-        res.sendStatus(403);
+        res.sendStatus(rejectcode);
     }
     else {
         res.sendStatus(200);
@@ -129,9 +124,10 @@ app.post('/openmessagingwebhook', (req,res) => {
     }
 });
 
-/*
-/ page handling internal requests
-*/
+//#endregion
+
+//#region webpage event handling
+
 io.on('connection', (socket) => {
         
    // connectiondictionary[senderid] = socket.id; 
@@ -292,20 +288,56 @@ io.on('connection', (socket) => {
 });
 
 
-//event handling
+//#endregion
+
+//#region console key input handling
+
 
 process.stdin.on('keypress',(str,key) => {
 
     switch(str)
     {
         case 'q':
-            
-            tunnel.close();
+            CloseServer();
             break;
     }
 });
 
-//functions
+//#endregion
+
+//#region function definitions
+function Update_Integration_Webhook_URL()
+{
+    if (localtunnelused)
+    {
+        if(tunnel.url)
+                currenturl = tunnel.url + "/openmessagingwebhook";
+    }
+    else
+    {
+        currenturl = "https://" + process.env.CODESPACE_NAME + "-3000." + process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN + "/openmessagingwebhook";
+    }
+    
+
+    var body = {
+        "outboundNotificationWebhookUrl":currenturl
+    };
+    
+    conversationapi.patchConversationsMessagingIntegrationsOpenIntegrationId(openmessagingintegrationid, body)
+    .then((data) => {
+        Logger("INFO","Updated Integration Webhook URL to " + data.outboundNotificationWebhookUrl);
+
+    });
+}
+
+function CloseServer()
+{
+    server.closeAllConnections();
+    server.close();
+    if(localtunnel) tunnel.close();
+    Logger("END","Web Server closed!");
+    process.exit();
+}
 
 function Logger(state, data){
     console.log(new Date().toISOString() + " - " + state + " -- " + data );
@@ -343,53 +375,106 @@ function main()
     process.stdin.setRawMode(true);
     readline.emitKeypressEvents(process.stdin);
 
+    switch (process.env.AWS_REGION)
+    {
+        case "eu-west-1":
+            apiclient.setEnvironment(platformclient.PureCloudRegionHosts.eu_west_1);
+            break;
+        case "eu-west-2":
+            apiclient.setEnvironment(platformclient.PureCloudRegionHosts.eu_west_2);
+            break;
+        case "eu-central-1":
+            apiclient.setEnvironment(platformclient.PureCloudRegionHosts.eu_central_1);
+            break;
+        case "eu-central-2":
+            apiclient.setEnvironment(platformclient.PureCloudRegionHosts.eu_central_2);
+            break;
+        case "us-west-2":
+            apiclient.setEnvironment(platformclient.PureCloudRegionHosts.us_west_2);
+            break;
+        default:
+            apiclient.setEnvironment(platformclient.PureCloudRegionHosts.us_east_1);
+            break;
+    }
+
     server.listen(3000, () => {
         Logger("START","web server listening on http://localhost:3000");
-    
-        apiclient.loginClientCredentialsGrant(oauthid, oauthpw)
-        .then(() => {
-            Logger("START","Platform API initialized successfully.")
-            conversationapi = new platformclient.ConversationsApi();
-        })
-        .catch((err) => {
-            Logger("ERROR","Platform API initialization failed " + err);
-        });
-    
-        (async () => {
-            tunnel = await localtunnel({port:3000,subdomain:mylocaltunnelsubdomain});
-    
-            Logger("START","Local tunnel open: " +  tunnel.url);
-            tunnel.on('close',() => {
-                server.closeAllConnections();
-                server.close();
-                Logger("END","Tunnel closed!");
-                process.exit();
-            });
-        })();
-        
     });
+
+    apiclient.loginClientCredentialsGrant(process.env.OAUTH_ID, process.env.OAUTH_PW)
+            .then(() => {
+                Logger("START","Platform API initialized successfully.")
+                conversationapi = new platformclient.ConversationsApi();
+
+            })
+            .catch((err) => {
+                Logger("ERROR","Platform API initialization failed " + err);
+            });
+
+
+    if (!process.env.CODESPACES)
+    {
+        (async () => {
+            tunnel = await localtunnel({port:3000});
+
+            Logger("START","Local tunnel open: " +  tunnel.url);
+            localtunnelused = true;
+            if(conversationapi)
+                Update_Integration_Webhook_URL();
+            
+            tunnel.on('close',() => {
+            });
+
+
+        })();
+    }
+    else {
+        if(conversationapi)
+         Update_Integration_Webhook_URL();
+    }
+
+
+
+    
 }
 
+//#endregion
 
-//init
+//#region command line parser
 program
     .option('-h, --help', 'help')
-    .option('-ra, --rejectallrequests','simulate failures')
+    .option('-r, --rejectrequests','simulate failures')
+    .option('-d, --debug','debug logging')
     .option('-v, --verbose','verbose logging');
 
 
 program.parse(process.argv);
 const options = program.opts();
 
-if (options.help) console.log("help text")
-else if (options.rejectallrequests){
+if (options.help) {
+    console.log("Usage: node server.js [options]");
+    console.log("Options: ");
+    console.log("   -h     displays this help");
+    console.log("   -d     enables extended response for all API function calls");
+    console.log("   -v     enabled verbose API logging with request and response body and header");
+    console.log("   -r XXX enables webhook rejection with HTTP status code XXX");
+
+}
+else if (options.rejectrequests){
     simulatefailures = true;
+    rejectcode = program.args[0];
+    main();
+}
+else if (options.debug)
+{
+    debug = true;    
+    apiclient.setReturnExtendedResponses(true);
+
     main();
 }
 else if (options.verbose)
 {
     debug = true;
-    
     apiclient.config.logger.log_level = apiclient.config.logger.logLevelEnum.level.LTrace;
     apiclient.config.logger.log_format = apiclient.config.logger.logFormatEnum.formats.TEXT;
     apiclient.config.logger.log_request_body = true;
@@ -401,16 +486,8 @@ else if (options.verbose)
 }
 else 
 {
-    debug = false;
-    
-    apiclient.config.logger.log_level = apiclient.config.logger.logLevelEnum.level.LDebug;
-    apiclient.config.logger.log_format = apiclient.config.logger.logFormatEnum.formats.TEXT;
-    apiclient.config.logger.log_request_body = true;
-    apiclient.config.logger.log_response_body = true;
-    apiclient.config.logger.log_to_console = false;
-    apiclient.config.logger.setLogger(); // To apply above changes
-
+    debug = false;   
     main();
 }
 
-
+//#endregion
