@@ -2,6 +2,8 @@
 const express = require ('express');
 const app = express();
 const http = require('http');
+const fs = require('fs')
+const path = require('path');
 const server = http.createServer(app);
 const {Server} = require ("socket.io");
 const io = new Server(server);
@@ -11,7 +13,9 @@ const cryptomodule = require ('crypto')
 const localtunnel = require ('localtunnel');
 const readline = require('readline');
 const { program } = require('commander');
+const { json } = require('stream/consumers');
 require('dotenv').config();
+
 
 const openmessagingintegrationid = process.env.INTEGRATION_ID;
 
@@ -27,6 +31,7 @@ var tunnel = null;
 var simulatefailures =  false;
 var localtunnelused = false;
 var currenturl = "https://cute-lions-act.loca.lt/openmessagingwebhook";
+var publicurldomain = "httsp://example.com";
 var rejectcode = 403;
 
 //#endregion
@@ -38,6 +43,11 @@ app.use(express.json());
 app.get('/', (req,res) => {
     res.sendFile(__dirname + '/index.html');
 });
+
+app.get('/public/:filename',(req,res) => {
+
+    res.sendFile(__dirname + "/public/" + req.params.filename);
+})
 
 app.post('/openmessagingwebhook', (req,res) => {
 
@@ -57,9 +67,6 @@ app.post('/openmessagingwebhook', (req,res) => {
     const messageHash = cryptomodule.createHmac('sha256',  process.env.INTEGRATION_SECRET)
      .update(jsonrequestbody)
      .digest('base64');
-
-    // console.log(`sha256=${messageHash}`);
-    // console.log(signature);
    
     if (`sha256=${messageHash}` !== signature) {
          //throw new Error("Webhook Validation Failed! Throw this away.");
@@ -103,9 +110,13 @@ app.post('/openmessagingwebhook', (req,res) => {
 
                 });
             }
-           
-            io.sockets.emit('chat message',jsondata.text);
-
+            if(jsondata.content)
+            {
+                io.sockets.emit('chat message attachment',jsondata.channel.from.nickname, jsondata.content[0].attachment.filename, jsondata.content[0].attachment.url);
+            }
+            else{
+                 io.sockets.emit('chat message',jsondata.channel.from.nickname,jsondata.text);
+            }
             SendReceiptToOrg(jsondata);
     
         }
@@ -132,89 +143,117 @@ io.on('connection', (socket) => {
         
    // connectiondictionary[senderid] = socket.id; 
    
-   //v2 web page user sent chat message, forwarding it to Genesys Cloud
-    socket.on('new_message_from_page', (msg) => {
+   // web page user sent chat message, forwarding it to Genesys Cloud
+    socket.on('new_message_from_page', (sender, customparticipantdata, msg) => {
     const now = new Date();
     var body = {
+        "id":senderid,
+        "channel": {
+            "messageId":cryptomodule.randomUUID(),
+            "from":{
+                "nickname":sender.fromname,
+                "id":sender.fromaddress,
+                "idType":"email"
+            },
+            "metadata": {
+                "customAttributes": {
+                    "demokey":customparticipantdata
+                }
+            },
+            "time":now.toISOString()
+        },
+        "text":msg,
+        "direction":"Inbound"
+    };
+
+    if (customparticipantdata == ""){
+        body = {
             "id":senderid,
             "channel": {
-                "platform":"Open",
-                "type":"Private",
                 "messageId":cryptomodule.randomUUID(),
-                "to": {
-                    "id":openmessagingintegrationid,
-                },
                 "from":{
-                    "nickname":msg.fromname,
-                    "id":msg.fromaddress,
+                    "nickname":sender.fromname,
+                    "id":sender.fromaddress,
                     "idType":"email"
                 },
-            "time":now.toISOString()
+                "time":now.toISOString()
             },
-            "type":"Text",
-            "text":msg.message,
+            "text":msg,
             "direction":"Inbound"
         };
-    
+    }
 
-    conversationapi.postConversationsMessageInboundOpenMessage(openmessagingintegrationid, body)
-    .then((data) => {
-        Logger("XMIT","Sent inbound message " + JSON.stringify(data, null, 2));
-    })
-    .catch((err) => {
-        Logger("ERROR", "Failure sending inbound message " + err);
-    });
-  
-    });
-
-    //v1 web page user sent chat message, forwarding it to Genesys Cloud
-    socket.on('chat message', (msg) => {
-       const now = new Date();
-       var body = {
-               "id":senderid,
-               "channel": {
-                   "platform":"Open",
-                   "type":"Private",
-                   "messageId":cryptomodule.randomUUID(),
-                   "to": {
-                       "id":"83862e6c-b4b9-44a9-b02e-6e6fc69450c4",
-                   },
-                   "from":{
-                       "nickname":"Bear",
-                       "id":"paddington@example.com",
-                       "idType":"email"
-                   },
-               "time":now.toISOString()
-               },
-               "type":"Text",
-               "text":msg,
-               "direction":"Inbound"
-           };
-              
-       const integrationId = '83862e6c-b4b9-44a9-b02e-6e6fc69450c4';
-   
-       conversationapi.postConversationsMessageInboundOpenMessage(integrationId, body)
+       conversationapi.postConversationsMessageInboundOpenMessage(openmessagingintegrationid, body)
         .then((data) => {
             Logger("XMIT","Sent inbound message " + JSON.stringify(data, null, 2));
-         })
-         .catch((err) => {
+        })
+        .catch((err) => {
             Logger("ERROR", "Failure sending inbound message " + err);
         });
-     
+
     });
 
-    //v2 web page user typing in input box, sending event to Genesys Cloud
+    //web page user added attachment file, saving it to server, sending to Genesys Cloud and informing web page of saved location to display in feed
+    socket.on('new_file',(sender, filename, filedata) => {
+       
+        const fileName = filename; 
+        const savePath = path.join(__dirname, 'public', fileName);
+        
+        try {
+
+            fs.writeFileSync(savePath, filedata);
+
+            const now = new Date();
+            var body = {
+                    "id":senderid,
+                    "channel": {
+                        "messageId":cryptomodule.randomUUID(),
+                        "from":{
+                            "nickname":sender.fromname,
+                            "id":sender.fromaddress,
+                            "idType":"email"
+                        },
+                        "time":now.toISOString()
+                    },
+                    "direction":"Inbound",
+                    'text':fileName,
+                    "content": [{
+                        "attachment": {
+                            "mediaType": "Image",
+                            "url":  publicurldomain + "/public/" + fileName,
+                            "mime": "image/jpeg",
+                            "filename": fileName
+                        }
+                    }]
+                };
+
+                conversationapi.postConversationsMessageInboundOpenMessage(openmessagingintegrationid, body)
+                    .then((data) => {
+                    Logger("XMIT","Sent inbound message " + JSON.stringify(data, null, 2));
+                })
+                .catch((err) => {
+                    Logger("ERROR", "Failure sending attachment message " + err);
+                });
+        
+                io.sockets.emit('confirm_file_upload_complete',fileName, publicurldomain + "/public/" + fileName);
+        }
+        catch{
+            Logger("ERROR", "Failure saving attachment to server");
+        }  
+    })
+
+    // web page user typing in input box, sending event to Genesys Cloud
     socket.on('page_visitor_typing', (msg) => {
 
         const now = new Date();
         var body = {
                "channel": {
-                   "from":{
+                    "from":{
                         "nickname":msg.fromname,
                         "id":msg.fromaddress,
                         "idType":"email"
-                   },
-               "time":now.toISOString()
+                    },
+                    "time":now.toISOString()
                },
                "events":[
                 {
@@ -223,46 +262,13 @@ io.on('connection', (socket) => {
                ]
            };
           
-       conversationapi.postConversationsMessageInboundOpenEvent(openmessagingintegrationid, body)
+        conversationapi.postConversationsMessageInboundOpenEvent(openmessagingintegrationid, body)
         .then((data) => {
             Logger("XMIT", "Sent inbound typing event " + JSON.stringify(data, null, 2));
          })
         .catch((err) => {
              Logger("ERROR","Failure sending inbound typing event " + err);
         });
-    
-    });
-
-    //v1 web page user typing in input box, sending event to Genesys Cloud
-    socket.on('chat typing', (msg) => {
-        Logger("INFO", "local chat user typing: ...");
-
-        const now = new Date();
-        var body = {
-               "channel": {
-                   "from":{
-                        "nickname":msg.fromname,
-                        "id":msg.fromaddress,
-                        "idType":"email"
-                   },
-               "time":now.toISOString()
-               },
-               "events":[
-                {
-                    "eventType":"Typing"
-                }
-               ]
-           };
-       const integrationId = '83862e6c-b4b9-44a9-b02e-6e6fc69450c4';
-   
-       conversationapi.postConversationsMessageInboundOpenEvent(integrationId, body)
-     .then((data) => {
-       Logger("XMIT","Typing event, postConversationsMessageInboundOpenMessage " + JSON.stringify(data, null, 2));
-     })
-     .catch((err) => {
-        Logger("ERROR","Failure sending typing event " + err);
-       
-     });
     
     });
 
@@ -287,7 +293,6 @@ io.on('connection', (socket) => {
     });
 });
 
-
 //#endregion
 
 //#region console key input handling
@@ -311,11 +316,15 @@ function Update_Integration_Webhook_URL()
     if (localtunnelused)
     {
         if(tunnel.url)
-                currenturl = tunnel.url + "/openmessagingwebhook";
+        {
+            publicurldomain = tunnel.url;
+            currenturl = tunnel.url + "/openmessagingwebhook";
+        }
     }
     else
     {
         currenturl = "https://" + process.env.CODESPACE_NAME + "-3000." + process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN + "/openmessagingwebhook";
+        publicurldomain = "https://" + process.env.CODESPACE_NAME + "-3000." + process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN;
     }
     
 
@@ -401,6 +410,8 @@ function main()
         Logger("START","web server listening on http://localhost:3000");
     });
 
+    console.log(process.env.OAUTH_ID);
+    console.log(process.env.OAUTH_PW);
     apiclient.loginClientCredentialsGrant(process.env.OAUTH_ID, process.env.OAUTH_PW)
             .then(() => {
                 Logger("START","Platform API initialized successfully.")
