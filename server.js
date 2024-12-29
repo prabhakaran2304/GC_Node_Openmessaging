@@ -410,8 +410,6 @@ function main()
         Logger("START","web server listening on http://localhost:3000");
     });
 
-    console.log(process.env.OAUTH_ID);
-    console.log(process.env.OAUTH_PW);
     apiclient.loginClientCredentialsGrant(process.env.OAUTH_ID, process.env.OAUTH_PW)
             .then(() => {
                 Logger("START","Platform API initialized successfully.")
